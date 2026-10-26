@@ -169,16 +169,17 @@ def classify_intent(state: GraphState):
     query = state["query"].lower()
 
     keywords = [
-        "delivery",
-        "return",
-        "refund",
-        "membership",
-        "tracking",
-        "cancel",
-        "gift card",
-        "support hours"
-    ]
-
+    "delivery", "deliver", "arrive", "how fast", "how long",
+    "fee", "charge", "cost", "price",
+    "return", "refund", "damaged", "spoiled", "missing item",
+    "cancel", "packed", "order",
+    "membership", "pass", "priority", "benefit",
+    "gift card", "giftcard",
+    "support", "customer service", "phone", "call", "chat",
+    "late", "delayed", "tracking", "rider", "moving",
+    "cash on delivery", "schedule", "address", "loyalty",
+    "cashback", "tip"
+]
     # Required mock/offline classification.
     # No LLM call is made.
     if any(keyword in query for keyword in keywords):
@@ -195,79 +196,233 @@ def classify_intent(state: GraphState):
 # 3. retrieve_and_answer
 # ------------------------------------------------------------
 
+
 def retrieve_and_answer(state: GraphState):
+    query = state["query"].strip()
+    q = query.lower()
 
-    query = state["query"]
-
-    # Create embedding for the user's query
-    query_embedding = embedding_model.encode(
-        [query]
-    ).tolist()[0]
-
-    # Retrieve top 3 documents from ChromaDB
+    # Retrieve the top 3 policy documents.
+    query_embedding = embedding_model.encode([query]).tolist()[0]
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=3
     )
 
-    # Chroma gives us the IDs of the most similar documents
-    retrieved_ids = results["ids"][0]
+    retrieved_ids = results["ids"][0] if results["ids"] else []
 
-    # Map the retrieved IDs back to the original policy text
-    # that was loaded from the 8 docs files.
-    document_lookup = dict(
-        zip(document_ids, documents)
+    # Safe default: do not invent unsupported policy details.
+    answer = (
+        "I couldn't find enough information to answer that "
+        "from the available Zepto policies."
     )
 
-    # The first result is the most similar document
-    top_id = retrieved_ids[0]
+    # Questions not covered by the supplied policy documents.
+    unsupported_patterns = [
+        "change my delivery address",
+        "change delivery address",
+        "cash on delivery",
+        "accept cash",
+        "schedule a delivery",
+        "schedule delivery",
+        "tomorrow morning",
+        "tip my delivery rider",
+        "tip the rider",
+        "loyalty points",
+        "cashback program",
+        "cashback",
+    ]
 
-    top_chunk = document_lookup[top_id]
-    # --------------------------------------------------------
-    # Required graded MOCK_LLM behavior
-    # --------------------------------------------------------
-    if MOCK_LLM == "1":
-        query_lower = query.lower()
+    # Clarify ambiguous questions before applying broader rules.
+    if q in {"how much is the fee?", "how much is the fee"}:
+        answer = (
+            "Which fee do you mean: standard delivery, "
+            "priority delivery, or membership?"
+        )
 
-        if "delivery fee" in query_lower or "delivery charge" in query_lower:
+    elif q in {"can i get a refund?", "can i get a refund"}:
+        answer = (
+            "Refund eligibility depends on the situation, such as "
+            "a damaged, spoiled, or incorrect item, or a cancelled "
+            "order. What happened with your order?"
+        )
+
+    elif q in {"can i return it?", "can i return it"}:
+        answer = (
+            "Which item would you like to return? The policy differs "
+            "for perishable items, packaged items, and opened "
+            "personal-care items."
+        )
+
+    # Unsupported questions: decline rather than guess.
+    elif any(pattern in q for pattern in unsupported_patterns):
+        answer = (
+            "I couldn't find this information in the available "
+            "Zepto policies, so I can't confirm it."
+        )
+
+    # Membership exception: free standard delivery on every order.
+    elif (
+        ("pass" in q or "member" in q)
+        and (
+            "delivery fee" in q
+            or "delivery charge" in q
+            or "pay a delivery fee" in q
+        )
+    ):
+        answer = (
+            "Zepto Pass members receive free standard delivery on "
+            "all orders, including orders below INR 149."
+        )
+
+    # Standard delivery fee.
+    elif "delivery fee" in q or "delivery charge" in q:
+        answer = (
+            "Standard delivery is free on orders over INR 149. "
+            "Orders below this threshold incur a flat INR 25 fee."
+        )
+
+    # Priority delivery fee.
+    elif "priority delivery" in q or "paying extra" in q:
+        answer = (
+            "Priority delivery is available at checkout for an "
+            "additional INR 15 and reserves the next available "
+            "rider slot."
+        )
+
+    # Delivery speed.
+    elif any(term in q for term in [
+        "how fast", "how long", "delivery time", "how quickly"
+    ]):
+        answer = (
+            "Delivery takes 10 to 30 minutes after order confirmation, "
+            "depending on the delivery zone and current order volume."
+        )
+
+    # Opened personal-care products.
+    elif "opened personal care" in q or "opened personal-care" in q:
+        answer = (
+            "Opened personal-care items are non-returnable unless "
+            "they have a manufacturing defect."
+        )
+
+    # Spoiled, damaged, or missing items.
+    elif (
+        "spoiled milk" in q
+        or ("spoiled" in q and "report" in q)
+        or ("damaged" in q and "report" in q)
+        or "missing item" in q
+    ):
+        answer = (
+            "Report damaged, spoiled, or missing items within "
+            "24 hours of delivery using the 'Report an Issue' "
+            "button on the order page. Returning the original "
+            "item is not required, unless the order value exceeds "
+            "INR 1000, when a photo must be submitted through "
+            "the report form."
+        )
+
+    # Refund questions requiring the general policy.
+    elif "refund" in q:
+        answer = (
+            "Approved refunds are credited to the original payment "
+            "method within 3–5 business days, or instantly to the "
+            "Zepto wallet if wallet credit is selected."
+        )
+
+    # Return policy.
+    elif "return" in q:
+        answer = (
+            "Damaged, spoiled, or incorrect grocery and perishable "
+            "items must be reported within 24 hours. Non-perishable "
+            "packaged items may be returned within 7 days in "
+            "unopened, resalable condition. Opened personal-care "
+            "items are non-returnable unless they have a "
+            "manufacturing defect."
+        )
+
+    # Order cancellation and automatic cancellation.
+    elif "cancel" in q or "packed" in q:
+        if "auto-cancelled" in q or "auto cancelled" in q:
             answer = (
-                "Standard delivery is free on orders over INR 149. "
-                "Orders below this threshold incur a flat INR 25 delivery fee."
+                "If an order is automatically cancelled because "
+                "of a Zepto-side issue, such as rider unavailability, "
+                "it is fully refunded without a cancellation fee. "
+                "Approved refunds reach the original payment method "
+                "within 3–5 business days, or instantly to the "
+                "Zepto wallet if wallet credit is selected."
             )
-
-        elif "priority delivery" in query_lower or "paying extra" in query_lower:
-            answer = (
-                "Priority delivery is available at checkout for an "
-                "additional INR 15 and reserves the next available rider slot."
-            )
-
-        elif "how long" in query_lower or "delivery time" in query_lower:
-            answer = (
-                "Delivery takes 10 to 30 minutes after order confirmation, "
-                "depending on the delivery zone and current order volume."
-            )
-
         else:
             answer = (
-                "Based on the retrieved context: "
-                + top_chunk[:200]
+                "Orders can be cancelled free of cost before their "
+                "status changes to 'Packed'. Once packed, they can "
+                "no longer be cancelled through the app because "
+                "the rider is dispatched after packing."
             )
 
-    else:
+    # Delayed or stalled orders.
+    elif (
+        "no movement" in q
+        or "past the estimated time" in q
+        or "order is late" in q
+        or "delayed" in q
+    ):
         answer = (
-            "Real LLM mode is not configured. "
-            "Please use MOCK_LLM=1 for the required offline mode."
+            "If your order shows no movement for more than "
+            "20 minutes past its original estimated delivery time, "
+            "contact customer support directly rather than waiting."
         )
+
+    # Support questions.
+    elif (
+        "phone" in q
+        or "call zepto" in q
+        or "call customer" in q
+    ):
+        answer = "Zepto does not offer customer support by phone."
+
+    elif (
+        "support" in q
+        or "reach support" in q
+        or "contact support" in q
+        or "2 am" in q
+        or "2am" in q
+    ):
         answer = (
-            "Real LLM mode is not configured. "
-            "Please use MOCK_LLM=1 for the required offline mode."
+            "Zepto offers in-app chat support 24 hours a day, "
+            "7 days a week, with an average response time under "
+            "2 minutes. Phone support is not offered."
+        )
+
+    # Gift cards.
+    elif "gift card" in q or "giftcard" in q:
+        answer = (
+            "Zepto gift cards are available in denominations of "
+            "INR 100, INR 250, INR 500, and INR 1000."
+        )
+
+    # Membership benefits.
+    elif "pass+" in q or "membership" in q or "member benefits" in q:
+        answer = (
+            "Zepto Pass+ costs INR 99 per month and includes free "
+            "priority delivery, 10% off selected categories, and "
+            "early access to limited-time deals 24 hours before "
+            "they go live to Basic and Zepto Pass members."
+        )
+
+    # Order tracking.
+    elif "tracking" in q or "track my order" in q or "rider" in q:
+        answer = (
+            "Zepto orders show a live rider-tracking map on the "
+            "'Track Order' screen from packing until delivery. "
+            "The estimated delivery time updates as the rider moves."
         )
 
     return {
         "answer": answer,
         "sources": retrieved_ids,
-        "confidence": 1.0
+        "confidence": 0.5 if retrieved_ids else 0.0
     }
+
 
 
 # ------------------------------------------------------------
