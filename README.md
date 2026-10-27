@@ -2,6 +2,13 @@
 
 A Retrieval-Augmented Generation (RAG) support assistant that retrieves relevant information from policy documents and provides responses to user queries. The project demonstrates document processing, semantic search, retrieval-based answering, intent routing, and API deployment.
 
+## Live Demo
+
+- **Live API (Swagger UI):** https://rag-project-86gm.onrender.com/docs
+- **Source Code:** https://github.com/konaindhureddy1289-max/RAG_Project
+
+Test the deployed API using the `POST /ask` endpoint to submit a policy-related question and view the answer, source documents, and confidence score.
+
 ## Overview
 
 This project implements a support assistant using eight sample policy documents. It uses sentence embeddings and ChromaDB to retrieve relevant document chunks and applies a response pipeline to answer supported questions or decline out-of-scope requests.
